@@ -14,7 +14,15 @@ SEEN_FILE = "seen.json"
 EXTRA_GP_LISTS = 3   # nombre de GP repliés à surveiller en plus du GP déplié
 MAX_POSTS_PER_RUN = 20
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; RedactionF1Bot/1.0)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Referer": "https://www.fia.com/",
+}
 PDF_RE = re.compile(
     r'<a[^>]+href="([^"]*?/system/files/decision-document/[^"]+?\.pdf)"[^>]*>(.*?)</a>',
     re.S,
@@ -23,10 +31,21 @@ NOJS_RE = re.compile(r'href="([^"]*decision-document-list/nojs/\d+)"')
 
 
 def get(url):
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    # Au cas où la réponse serait du JSON avec des "\/" échappés
-    return r.text.replace("\\/", "/").replace('\\"', '"')
+    last = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            if r.status_code in (403, 429) or r.status_code >= 500:
+                last = f"HTTP {r.status_code}"
+                time.sleep(5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            # Au cas où la réponse serait du JSON avec des "\/" échappés
+            return r.text.replace("\\/", "/").replace('\\"', '"')
+        except requests.RequestException as e:
+            last = str(e)
+            time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"Échec de {url} : {last}")
 
 
 def extract_docs(html):
@@ -75,7 +94,12 @@ def post(title, url):
 
 
 def main():
-    docs = collect()
+    try:
+        docs = collect()
+    except Exception as e:
+        # Blocage temporaire du site : on réessaiera au prochain passage
+        print("Site FIA inaccessible pour le moment :", e)
+        return
     print(f"{len(docs)} documents trouvés")
     if not docs:
         print("Rien trouvé, la page a peut-être changé. On s'arrête.")
